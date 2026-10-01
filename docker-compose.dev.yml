@@ -1,0 +1,43 @@
+# Local development stack: only the stateful pieces run in Docker (Postgres + pgvector).
+# The Spring/Vert.x backend and Vite frontend run natively on your machine for fast
+# hot-reload (`mvn spring-boot:run`, `npm run dev`), talking to this DB on localhost:5432
+# and to your local Ollama on localhost:11434 -- nothing here rebuilds the app image.
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d
+#   mvn spring-boot:run                     (backend, port 8080)
+#   cd Frontend && npm run dev              (frontend, port 5173)
+#
+# For a fully containerized build (mirrors production), use docker-compose.prod.yml instead:
+#   docker compose -f docker-compose.prod.yml up --build -d
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rag_ingestor
+      POSTGRES_USER: rag_app
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-rag_app_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_app -d rag_ingestor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Optional lightweight DB browser for local development. Open http://localhost:8081,
+  # System=PostgreSQL, Server=db, Username=rag_app, Password=<DATABASE_PASSWORD>, DB=rag_ingestor.
+  adminer:
+    image: adminer:4
+    restart: unless-stopped
+    depends_on:
+      - db
+    ports:
+      - "8081:8080"
+
+volumes:
+  postgres_data_dev:

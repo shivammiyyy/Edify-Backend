@@ -1,0 +1,46 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rag_ingestor
+      POSTGRES_USER: rag_app
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-rag_app_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_app -d rag_ingestor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://db:5432/rag_ingestor
+      DATABASE_USERNAME: rag_app
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-rag_app_dev_password}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-changeme}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-changeme}
+      APP_ADMIN_EMAIL: ${APP_ADMIN_EMAIL:-admin@example.com}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:8080}
+      OAUTH_SUCCESS_URL: ${OAUTH_SUCCESS_URL:-http://localhost:8080/}
+      LLM_URL: http://host.docker.internal:11434/api/chat
+      LLM_MODEL: ${LLM_MODEL:-qwen3:8b}
+      EMBEDDINGS_URL: http://host.docker.internal:11434/api/embeddings
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-qwen3-embedding:0.6b}
+      EMBEDDINGS_DIMENSION: ${EMBEDDINGS_DIMENSION:-1024}
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:
