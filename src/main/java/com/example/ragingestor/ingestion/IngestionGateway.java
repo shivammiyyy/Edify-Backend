@@ -23,14 +23,6 @@ public class IngestionGateway {
         this.vertx = vertx;
     }
 
-    public IngestionResult create(CreateDocumentCommand cmd) {
-        return request(IngestionVerticle.ADDR_CREATE, cmd);
-    }
-
-    public IngestionResult update(UpdateDocumentCommand cmd) {
-        return request(IngestionVerticle.ADDR_UPDATE, cmd);
-    }
-
     public IngestionResult delete(DeleteDocumentCommand cmd) {
         return request(IngestionVerticle.ADDR_DELETE, cmd);
     }

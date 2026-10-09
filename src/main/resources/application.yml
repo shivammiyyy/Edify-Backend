@@ -7,6 +7,25 @@ spring:
     username: ${DATABASE_USERNAME:rag_app}
     password: ${DATABASE_PASSWORD:rag_app_dev_password}
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      retries: 10
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:edify-document-ingestion}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        max.poll.interval.ms: 1800000
+
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+
   jpa:
     hibernate:
       ddl-auto: validate   # schema.sql / migrations own the schema; JPA never auto-alters it
@@ -20,6 +39,11 @@ spring:
     init:
       mode: always   # runs schema.sql on startup; switch to a real Flyway/Liquibase migration for prod
 
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
   security:
     oauth2:
       client:
@@ -32,6 +56,21 @@ spring:
 server:
   port: 8080
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
+logging:
+  pattern:
+    level: "%5p [corr:%X{correlationId}]"
+
 app:
   security:
     # The single hardcoded admin. On this email's very first login it is provisioned as
@@ -43,16 +82,48 @@ app:
   frontend:
     origin: ${FRONTEND_ORIGIN:http://localhost:5173}
 
+  documents:
+    max-upload-bytes: ${MAX_UPLOAD_BYTES:10485760}
+
+  storage:
+    endpoint: ${OBJECT_STORAGE_ENDPOINT:http://localhost:9000}
+    access-key: ${OBJECT_STORAGE_ACCESS_KEY:edify-local-access}
+    secret-key: ${OBJECT_STORAGE_SECRET_KEY:edify-local-secret}
+    bucket: ${OBJECT_STORAGE_BUCKET:edify-documents}
+
+  kafka:
+    enabled: ${KAFKA_ENABLED:true}
+    consumer-group: ${KAFKA_CONSUMER_GROUP:edify-document-ingestion}
+    consumer-address: ${KAFKA_CONSUMER_ADDRESS:ingestion.process-job}
+    topics:
+      uploaded: edify.document.uploaded
+      processed: edify.document.processed
+      failed: edify.document.failed
+
   embeddings:
     url: ${EMBEDDINGS_URL:http://localhost:11434/api/embeddings}
     model: ${EMBEDDINGS_MODEL:qwen3-embedding:0.6b}
+    api-key: ${EMBEDDINGS_API_KEY:}
+    timeout: ${EMBEDDINGS_TIMEOUT:PT60S}
     dimension: ${EMBEDDINGS_DIMENSION:1024}
+
+  ai:
+    provider: ${AI_PROVIDER:ollama}
 
   llm:
     url: ${LLM_URL:http://localhost:11434/api/chat}
     model: ${LLM_MODEL:qwen3:8b}
+    api-key: ${LLM_API_KEY:}
+    timeout: ${LLM_TIMEOUT:PT90S}
 
   rag:
     corpus-description: >
       Internal knowledge base of company policy documents, engineering runbooks,
       and product specs. Replace with a real description of what's actually ingested.
+
+  cache:
+    embedding-ttl: ${EMBEDDING_CACHE_TTL:PT168H}
+
+  rate-limit:
+    documents-per-minute: ${DOCUMENTS_PER_MINUTE:10}
+    messages-per-minute: ${MESSAGES_PER_MINUTE:20}

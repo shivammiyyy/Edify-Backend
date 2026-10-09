@@ -4,6 +4,7 @@ import com.example.ragingestor.domain.DocumentMeta;
 import com.example.ragingestor.domain.DocumentMetaRepository;
 import com.example.ragingestor.domain.Folder;
 import com.example.ragingestor.domain.FolderRepository;
+import com.example.ragingestor.security.AuthorizationService;
 import com.example.ragingestor.security.Role;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -12,7 +13,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -24,10 +27,13 @@ public class FolderService {
 
     private final FolderRepository folderRepository;
     private final DocumentMetaRepository documentMetaRepository;
+    private final AuthorizationService authorizationService;
 
-    public FolderService(FolderRepository folderRepository, DocumentMetaRepository documentMetaRepository) {
+    public FolderService(FolderRepository folderRepository, DocumentMetaRepository documentMetaRepository,
+                         AuthorizationService authorizationService) {
         this.folderRepository = folderRepository;
         this.documentMetaRepository = documentMetaRepository;
+        this.authorizationService = authorizationService;
     }
 
     public record FolderContents(List<Folder> folders, List<DocumentMeta> documents, List<Folder> breadcrumbs) {}
@@ -38,16 +44,16 @@ public class FolderService {
                     .filter(folder -> !folder.isDeleted())
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "folder not found"));
         }
+        authorizationService.requireReadFolder(folderId, viewerRole);
         List<Folder> folders = (folderId == null
                 ? folderRepository.findByParentIdIsNullAndDeletedFalse()
                 : folderRepository.findByParentIdAndDeletedFalse(folderId)).stream()
-                .filter(folder -> viewerRole.atLeast(folder.getMinRoleRequired()))
+                .filter(folder -> authorizationService.canReadFolder(folder.getId(), viewerRole))
                 .toList();
         List<DocumentMeta> documents = (folderId == null
                 ? documentMetaRepository.findByFolderIdIsNull()
                 : documentMetaRepository.findByFolderId(folderId)).stream()
-                .filter(document -> document.getStatus() != DocumentMeta.IngestionStatus.DELETED)
-                .filter(document -> viewerRole.atLeast(document.getMinRoleRequired()))
+                .filter(document -> authorizationService.canReadDocument(document, viewerRole))
                 .toList();
         return new FolderContents(folders, documents, breadcrumbs(folderId));
     }
@@ -65,7 +71,8 @@ public class FolderService {
     }
 
     @Transactional
-    public Folder create(String name, UUID parentId, Role minRoleRequired, UUID actorUserId) {
+    public Folder create(String name, UUID parentId, Role minRoleRequired, UUID actorUserId, Role actorRole) {
+        authorizationService.requireWriteFolder(parentId, actorRole);
         if (parentId != null) {
             folderRepository.findById(parentId)
                     .filter(folder -> !folder.isDeleted())
@@ -80,7 +87,8 @@ public class FolderService {
     }
 
     @Transactional
-    public Folder rename(UUID folderId, String name, Role minRoleRequired) {
+    public Folder rename(UUID folderId, String name, Role minRoleRequired, Role actorRole) {
+        authorizationService.requireWriteFolder(folderId, actorRole);
         Folder folder = folderRepository.findById(folderId)
                 .filter(existing -> !existing.isDeleted())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "folder not found"));
@@ -91,7 +99,9 @@ public class FolderService {
     }
 
     @Transactional
-    public Folder move(UUID folderId, UUID newParentId) {
+    public Folder move(UUID folderId, UUID newParentId, Role actorRole) {
+        authorizationService.requireWriteFolder(folderId, actorRole);
+        authorizationService.requireWriteFolder(newParentId, actorRole);
         Folder folder = folderRepository.findById(folderId)
                 .filter(existing -> !existing.isDeleted())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "folder not found"));
@@ -109,15 +119,18 @@ public class FolderService {
     /** True if {@code candidateAncestorId} is {@code folderId} or one of its descendants. */
     private boolean isDescendant(UUID candidateAncestorId, UUID folderId) {
         UUID current = candidateAncestorId;
+        Set<UUID> visited = new HashSet<>();
         while (current != null) {
             if (current.equals(folderId)) return true;
+            if (!visited.add(current)) return true;
             current = folderRepository.findById(current).map(Folder::getParentId).orElse(null);
         }
         return false;
     }
 
     @Transactional
-    public void delete(UUID folderId) {
+    public void delete(UUID folderId, Role actorRole) {
+        authorizationService.requireWriteFolder(folderId, actorRole);
         Folder folder = folderRepository.findById(folderId)
                 .filter(existing -> !existing.isDeleted())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "folder not found"));

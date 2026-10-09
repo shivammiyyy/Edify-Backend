@@ -31,10 +31,6 @@ public class VertxConfig {
     }
 
     private void registerCodecs(Vertx vertx) {
-        vertx.eventBus().registerDefaultCodec(CreateDocumentCommand.class,
-                new JavaSerializationCodec<>(CreateDocumentCommand.class));
-        vertx.eventBus().registerDefaultCodec(UpdateDocumentCommand.class,
-                new JavaSerializationCodec<>(UpdateDocumentCommand.class));
         vertx.eventBus().registerDefaultCodec(DeleteDocumentCommand.class,
                 new JavaSerializationCodec<>(DeleteDocumentCommand.class));
         vertx.eventBus().registerDefaultCodec(IngestionResult.class,

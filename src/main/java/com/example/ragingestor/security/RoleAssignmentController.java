@@ -11,9 +11,13 @@ import org.springframework.http.HttpStatus;
 
 import java.util.List;
 import java.util.UUID;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 
 @RestController
 @RequestMapping("/api/admin/users")
+@Tag(name = "Access management", description = "Custodian and administrator user role management")
 public class RoleAssignmentController {
 
     private final AppUserRepository appUserRepository;
@@ -32,6 +36,7 @@ public class RoleAssignmentController {
     // hasRole("CUSTODIAN") at the SecurityConfig layer already keeps WRITE/READ out entirely.
     @GetMapping
     @PreAuthorize("hasRole('CUSTODIAN')")
+    @Operation(summary = "List registered users")
     public List<UserView> listUsers() {
         return appUserRepository.findAll().stream().map(UserView::of).toList();
     }
@@ -43,6 +48,8 @@ public class RoleAssignmentController {
      */
     @PutMapping("/{userId}/role")
     @PreAuthorize("hasRole('CUSTODIAN')")
+    @Operation(summary = "Change a user's application role")
+    @SecurityRequirement(name = "csrfToken")
     public UserView changeRole(@PathVariable UUID userId,
                                 @Valid @RequestBody RoleChangeRequest request,
                                 java.security.Principal principal) {

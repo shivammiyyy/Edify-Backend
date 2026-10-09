@@ -29,6 +29,9 @@ public class DocumentChunk {
     @Column(nullable = false)
     private UUID documentId;
 
+    @Column(name = "version_id")
+    private UUID versionId;
+
     @Column(nullable = false)
     private int chunkIndex;
 

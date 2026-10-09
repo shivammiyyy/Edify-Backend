@@ -14,12 +14,12 @@ import org.springframework.stereotype.Service;
 @Service
 public class QueryIntentClassifier {
 
-    private final LlmClient llmClient;
+    private final LlmProvider llmProvider;
     private final String corpusDescription;
 
-    public QueryIntentClassifier(LlmClient llmClient,
+    public QueryIntentClassifier(LlmProvider llmProvider,
                                   @Value("${app.rag.corpus-description}") String corpusDescription) {
-        this.llmClient = llmClient;
+        this.llmProvider = llmProvider;
         this.corpusDescription = corpusDescription;
     }
 
@@ -40,7 +40,7 @@ public class QueryIntentClassifier {
 
     public IntentResult classify(String userQuery) {
         String userPrompt = "Corpus description: " + corpusDescription + "\n\nUser message: " + userQuery;
-        String raw = llmClient.complete(SYSTEM_PROMPT, userPrompt);
+        String raw = llmProvider.complete(SYSTEM_PROMPT, userPrompt);
         try {
             JsonObject json = new JsonObject(raw.trim());
             return new IntentResult(

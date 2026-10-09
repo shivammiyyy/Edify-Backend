@@ -17,52 +17,104 @@ Browser / API client
        v
 Spring Boot :8080
   |-- Spring Security: OAuth2/OIDC login, HTTP session, role checks
-  |-- /api/documents --> Vert.x event bus --> ingestion worker
-  |                                         |-- chunk text
-  |                                         |-- call Ollama embeddings
-  |                                         `-- save metadata, chunks, vectors
+  |-- POST /api/documents --> persist document/version/job + original in MinIO
+  |                            |
+  |                            `--> Kafka: edify.document.uploaded
+  |                                      |
+  |                                      `--> listener --> Vert.x worker
+  |                                             |-- parse / chunk / embed
+  |                                             |-- persist stage and job status
+  |                                             `-- index chunks/vectors in PostgreSQL
+  |                                      Kafka: processed / failed events
   |
-  `-- /api/query --> intent classification (Ollama chat)
-                     --> embedding (Ollama)
-                     --> pgvector search with role filter
-                     `--> grounded answer generation (Ollama chat)
-                              |
-                              +-- PostgreSQL + pgvector :5432
-                              `-- Ollama on host :11434
+  |-- /api/query --> authorization-aware hybrid RAG --> LLM provider --> citations
+  |-- /api/conversations --> PostgreSQL history + token/source SSE stream
+  `-- Redis --> embedding cache + per-user rate limits
+        |
+        +-- PostgreSQL + pgvector :5432
+        +-- MinIO object storage :9000
+        +-- Kafka asynchronous ingestion
+        `-- Ollama locally or configured cloud AI providers
 ```
 
 ## Runtime and deployment
 
-Two Compose files cover the two ways you'd run this:
+Compose files cover the full containerized stack, a production-like bundled app, and the
+native hot-reload development setup:
 
 | File | Purpose | Services |
 | --- | --- | --- |
-| `docker-compose.dev.yml` | Local development with hot reload | `db` (Postgres/pgvector), `adminer` (DB browser on `:8081`) — backend/frontend run natively via `mvn spring-boot:run` / `npm run dev` |
-| `docker-compose.prod.yml` | Production-like, fully containerized | `app` (built Spring Boot + bundled frontend), `db` (Postgres/pgvector) |
+| `docker-compose.yml` | Complete local stack | `frontend` (Nginx), `backend` (non-root Spring Boot), PostgreSQL/pgvector, Redis, Kafka, MinIO, and Ollama |
+| `docker-compose.dev.yml` | Native hot reload | Postgres/pgvector, Redis, MinIO, Kafka, Adminer — backend/frontend run natively; Ollama runs on the host |
+| `docker-compose.prod.yml` | Production-like bundled app | `app` (non-root Spring Boot + bundled frontend), Postgres, Redis, MinIO, and Kafka |
+
+The default `docker compose up --build -d` uses separate frontend/backend containers.
+Nginx proxies API, OAuth, and streaming requests to Spring Boot on the same browser
+origin. Run `docker compose exec ollama ollama pull qwen3:8b` and
+`docker compose exec ollama ollama pull qwen3-embedding:0.6b` once to initialize the
+persistent local models.
 
 `docker-compose.prod.yml` runs:
 
 | Service | Purpose | Persistence / connection |
 | --- | --- | --- |
-| `app` | Spring Boot API and embedded Vert.x | Port `8080`; connects to the Compose database and to host Ollama |
+| `app` | Spring Boot API and embedded Vert.x | Port `8080`; connects to Compose services and configured local/cloud AI provider |
 | `db` | PostgreSQL 16 with pgvector | Port `5432`; `postgres_data` volume |
+| `redis` | Embedding cache and rate-limit counters | Internal `6379`; `redis_data` volume |
+| `minio` | S3-compatible storage for original document versions | Ports `9000`/`9001`; `object_data` volume |
+| `kafka` | Single-node KRaft broker for asynchronous document events | Internal `9092`; host `29092`; `kafka_data` volume |
 
-The Docker build runs the frontend TypeScript check and Vite production build,
-packages the resulting static assets into the Spring Boot JAR, and serves the
-complete app from port `8080`.
+`Dockerfile` builds the frontend into the Spring Boot image for the bundled app option.
+`Dockerfile.backend` builds a backend-only image, and `Frontend/Dockerfile` builds the
+static SPA into Nginx for the default stack. Both backend images run as an unprivileged
+UID and include a readiness-based health check.
 
-Ollama runs on the host, not in Compose. The app container connects to it using
-`host.docker.internal:11434`. The default chat model is `qwen3:8b`; the default
-embedding model is `qwen3-embedding:0.6b`. The embedding database column is
+The default chat model is `qwen3:8b`; the default embedding model is
+`qwen3-embedding:0.6b`. The embedding database column is
 `vector(1024)`, matching that model's output dimension.
+
+Set `AI_PROVIDER=cloud` to select the OpenAI-compatible `LlmProvider` and
+`EmbeddingProvider`; configure `LLM_URL`, `LLM_MODEL`, `LLM_API_KEY`, `EMBEDDINGS_URL`,
+`EMBEDDINGS_MODEL`, and `EMBEDDINGS_API_KEY` for those endpoints. Cloud embedding output
+must remain 1024 dimensions to fit the existing pgvector schema.
+
+RAG retrieval combines authorization-filtered pgvector cosine results and PostgreSQL
+English full-text results. `WeightedHybridReranker` uses 0.7 vector and 0.3 normalized
+keyword score weights. Optional department, document-type, tags, and owner filters apply
+inside both retrieval queries. Responses include citations for the selected document
+version and chunk, with an excerpt and score. Page and section are currently null because
+the parsers do not retain source-location metadata.
+
+Conversation records and messages are stored in PostgreSQL and scoped to the authenticated
+user. The conversation endpoint streams status, citation, token, completion, and error SSE
+events; the latest eight messages are supplied as untrusted context for simple follow-up
+questions. Redis stores embeddings under a SHA-256 content key plus model identifier and
+enforces atomic per-user minute limits for uploads and chat messages. Redis is not the
+source of truth for application data.
+
+Actuator exposes status-only health and liveness/readiness probes publicly; diagnostic
+metrics are restricted to authenticated administrators. Micrometer records RAG,
+retrieval, embedding, LLM, ingestion, and Kafka publish failure measurements without
+request-content or user-identifier labels. Testcontainers integration coverage exercises
+pgvector, Redis, and Kafka using disposable local containers.
+
+The interactive OpenAPI reference is served at `/swagger-ui/index.html` and the JSON
+specification at `/v3/api-docs`. Both require an authenticated session. State-changing
+requests require the CSRF token from `/api/csrf`, as in the rest of the application.
 
 The Docker entrypoint at `docker/initdb/00-pgvector.sql` enables pgvector when a
 new database volume is first initialized. Spring then applies
 `src/main/resources/schema.sql`; Hibernate validates the resulting schema.
 Database data persists in the named volume across normal container restarts.
+Original files live in a MinIO bucket created by the application on first upload.
+PostgreSQL stores their content hashes, storage keys, version metadata, and chunk
+references; extracted text is what gets chunked and embedded.
 
 Configuration is supplied through environment variables (normally via a local,
-untracked `.env` file). Important settings include:
+untracked `.env` file; production uses the `prod` profile). When `KAFKA_ENABLED=false`,
+the publisher dispatches ingestion directly to the embedded Vert.x worker instead; this
+avoids requiring Kafka in a free hosted deployment but does not provide durable queue
+replay after a process restart. Important settings include:
 
 | Variable | Purpose |
 | --- | --- |
@@ -71,6 +123,12 @@ untracked `.env` file). Important settings include:
 | `DATABASE_PASSWORD` | Database password |
 | `LLM_URL`, `LLM_MODEL` | Ollama chat API URL and model |
 | `EMBEDDINGS_URL`, `EMBEDDINGS_MODEL`, `EMBEDDINGS_DIMENSION` | Embeddings API, model, and vector size |
+| `AI_PROVIDER` | `ollama` (default) or OpenAI-compatible `cloud` provider |
+| `LLM_API_KEY`, `EMBEDDINGS_API_KEY` | Optional bearer credentials for cloud providers |
+| `REDIS_URL` | Redis URI (`redis://` locally or `rediss://` for TLS-managed Redis) |
+| `EMBEDDING_CACHE_TTL` | Redis embedding cache lifetime |
+| `DOCUMENTS_PER_MINUTE`, `MESSAGES_PER_MINUTE` | Per-user request limits for expensive operations |
+| `KAFKA_ENABLED` | Use Kafka ingestion transport (`true` locally) or direct Vert.x dispatch (`false` for hosted fallback) |
 
 The checked-in configuration contains development defaults. Replace placeholder
 OAuth credentials before attempting a login, and do not commit real secrets.
