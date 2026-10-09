@@ -3,6 +3,7 @@ package com.example.ragingestor.rag;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.WebClient;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.concurrent.ExecutionException;
  * request, so a batch is sent sequentially to avoid overwhelming a local model.
  */
 @Service
+@ConditionalOnProperty(name = "app.ai.provider", havingValue = "ollama", matchIfMissing = true)
 public class HttpEmbeddingService implements EmbeddingService {
 
     private final WebClient webClient;
@@ -44,6 +46,11 @@ public class HttpEmbeddingService implements EmbeddingService {
             vectors.add(embedOne(text));
         }
         return List.copyOf(vectors);
+    }
+
+    @Override
+    public String modelId() {
+        return model;
     }
 
     private float[] embedOne(String text) {

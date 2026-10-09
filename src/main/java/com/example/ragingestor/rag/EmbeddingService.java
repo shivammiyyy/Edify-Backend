@@ -1,8 +1,5 @@
 package com.example.ragingestor.rag;
 
-import java.util.List;
-
-public interface EmbeddingService {
-    float[] embed(String text);
-    List<float[]> embedBatch(List<String> texts);
-}
+/** @deprecated Inject {@link EmbeddingProvider} instead. */
+@Deprecated
+public interface EmbeddingService extends EmbeddingProvider {}

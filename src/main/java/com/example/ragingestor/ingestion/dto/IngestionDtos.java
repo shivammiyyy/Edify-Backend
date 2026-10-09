@@ -12,18 +12,26 @@ public class IngestionDtos {
             String content,
             Role minRoleRequired,
             UUID actorUserId,
-            UUID folderId
+            UUID folderId,
+            String correlationId,
+            byte[] originalFile,
+            String contentType
     ) implements Serializable {}
 
     public record UpdateDocumentCommand(
             UUID documentId,
             String newContent,
-            UUID actorUserId
+            UUID actorUserId,
+            String correlationId,
+            String filename,
+            byte[] originalFile,
+            String contentType
     ) implements Serializable {}
 
     public record DeleteDocumentCommand(
             UUID documentId,
-            UUID actorUserId
+            UUID actorUserId,
+            String correlationId
     ) implements Serializable {}
 
     public record MoveDocumentCommand(

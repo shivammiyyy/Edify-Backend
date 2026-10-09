@@ -1,0 +1,52 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
+  data:
+    redis:
+      url: ${REDIS_URL}
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+
+server:
+  port: ${PORT:8080}
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        secure: true
+        http-only: true
+        same-site: none
+
+app:
+  security:
+    admin-email: ${APP_ADMIN_EMAIL}
+    oauth-success-url: ${OAUTH_SUCCESS_URL}
+  frontend:
+    origin: ${FRONTEND_ORIGIN}
+  storage:
+    endpoint: ${OBJECT_STORAGE_ENDPOINT}
+    access-key: ${OBJECT_STORAGE_ACCESS_KEY}
+    secret-key: ${OBJECT_STORAGE_SECRET_KEY}
+    bucket: ${OBJECT_STORAGE_BUCKET:edify-documents}
+  kafka:
+    enabled: ${KAFKA_ENABLED:false}
+  ai:
+    provider: ${AI_PROVIDER:cloud}
+  llm:
+    url: ${LLM_URL}
+    model: ${LLM_MODEL}
+    api-key: ${LLM_API_KEY}
+    timeout: ${LLM_TIMEOUT:PT90S}
+  embeddings:
+    url: ${EMBEDDINGS_URL}
+    model: ${EMBEDDINGS_MODEL}
+    api-key: ${EMBEDDINGS_API_KEY}
+    timeout: ${EMBEDDINGS_TIMEOUT:PT60S}
+    dimension: ${EMBEDDINGS_DIMENSION:1024}

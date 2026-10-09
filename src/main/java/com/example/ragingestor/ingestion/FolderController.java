@@ -13,6 +13,9 @@ import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 
 /**
  * Drive-style folder browsing: folders and the documents inside them, navigable via
@@ -22,6 +25,7 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/folders")
+@Tag(name = "Folders", description = "Role-filtered folder browsing and folder management")
 public class FolderController {
 
     private final FolderService folderService;
@@ -55,6 +59,7 @@ public class FolderController {
 
     @GetMapping("/contents")
     @PreAuthorize("hasRole('READ')")
+    @Operation(summary = "List visible child folders, documents, and breadcrumbs")
     public ContentsView contents(@RequestParam(required = false) UUID folderId,
                                   @AuthenticationPrincipal AppPrincipal principal) {
         FolderService.FolderContents result = folderService.contents(folderId, principal.getRole());
@@ -66,25 +71,36 @@ public class FolderController {
 
     @PostMapping
     @PreAuthorize("hasRole('WRITE')")
+    @Operation(summary = "Create a folder")
+    @SecurityRequirement(name = "csrfToken")
     public FolderView create(@Valid @RequestBody CreateFolderRequest req, @AuthenticationPrincipal AppPrincipal principal) {
-        return FolderView.of(folderService.create(req.name(), req.parentId(), req.minRoleRequired(), principal.getUserId()));
+        return FolderView.of(folderService.create(req.name(), req.parentId(), req.minRoleRequired(),
+                principal.getUserId(), principal.getRole()));
     }
 
     @PutMapping("/{folderId}")
     @PreAuthorize("hasRole('WRITE')")
-    public FolderView rename(@PathVariable UUID folderId, @RequestBody RenameFolderRequest req) {
-        return FolderView.of(folderService.rename(folderId, req.name(), req.minRoleRequired()));
+    @Operation(summary = "Rename a folder or change its minimum role")
+    @SecurityRequirement(name = "csrfToken")
+    public FolderView rename(@PathVariable UUID folderId, @RequestBody RenameFolderRequest req,
+                             @AuthenticationPrincipal AppPrincipal principal) {
+        return FolderView.of(folderService.rename(folderId, req.name(), req.minRoleRequired(), principal.getRole()));
     }
 
     @PutMapping("/{folderId}/move")
     @PreAuthorize("hasRole('WRITE')")
-    public FolderView move(@PathVariable UUID folderId, @RequestBody MoveFolderRequest req) {
-        return FolderView.of(folderService.move(folderId, req.parentId()));
+    @Operation(summary = "Move a folder")
+    @SecurityRequirement(name = "csrfToken")
+    public FolderView move(@PathVariable UUID folderId, @RequestBody MoveFolderRequest req,
+                           @AuthenticationPrincipal AppPrincipal principal) {
+        return FolderView.of(folderService.move(folderId, req.parentId(), principal.getRole()));
     }
 
     @DeleteMapping("/{folderId}")
     @PreAuthorize("hasRole('WRITE')")
-    public void delete(@PathVariable UUID folderId) {
-        folderService.delete(folderId);
+    @Operation(summary = "Delete an empty folder")
+    @SecurityRequirement(name = "csrfToken")
+    public void delete(@PathVariable UUID folderId, @AuthenticationPrincipal AppPrincipal principal) {
+        folderService.delete(folderId, principal.getRole());
     }
 }

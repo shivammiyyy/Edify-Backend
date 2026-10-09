@@ -1,0 +1,55 @@
+services:
+  - type: web
+    name: edify-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.backend
+    dockerContext: .
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_USERNAME
+        sync: false
+      - key: DATABASE_PASSWORD
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: APP_ADMIN_EMAIL
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: OAUTH_SUCCESS_URL
+        sync: false
+      - key: OBJECT_STORAGE_ENDPOINT
+        sync: false
+      - key: OBJECT_STORAGE_ACCESS_KEY
+        sync: false
+      - key: OBJECT_STORAGE_SECRET_KEY
+        sync: false
+      - key: OBJECT_STORAGE_BUCKET
+        value: edify-documents
+      - key: AI_PROVIDER
+        value: cloud
+      - key: LLM_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: EMBEDDINGS_URL
+        sync: false
+      - key: EMBEDDINGS_MODEL
+        sync: false
+      - key: EMBEDDINGS_API_KEY
+        sync: false
+      - key: EMBEDDINGS_DIMENSION
+        value: "1024"
+      - key: KAFKA_ENABLED
+        value: "false"

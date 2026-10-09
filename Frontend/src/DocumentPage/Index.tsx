@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react"
 import {
-  ChevronRight, FilePlus2, FileText, FolderPlus, Folder as FolderIcon, Home,
-  LoaderCircle, Pencil, RefreshCw, Trash2, Upload, X,
+  Check, ChevronRight, Circle, FilePlus2, FileText, FolderPlus, Folder as FolderIcon, Home,
+  Info, LoaderCircle, Pencil, RefreshCw, Search, Trash2, Upload, X,
 } from "lucide-react"
-import { api, type CurrentUser, type DocumentItem, type FolderContents, type Role } from "../api"
+import { api, type CurrentUser, type DocumentItem, type DocumentVersion, type FolderContents, type IngestionJob, type Role } from "../api"
 
 interface DocumentPageProps {
   user: CurrentUser
@@ -16,6 +16,8 @@ const prettyDate = (value: string) => new Date(value).toLocaleDateString(undefin
 })
 
 const emptyContents: FolderContents = { folders: [], documents: [], breadcrumbs: [] }
+const ingestionStages: IngestionJob["status"][] = ["UPLOADED", "PARSING", "CHUNKING", "EMBEDDING", "INDEXING", "READY"]
+interface TrackedJob { jobId: string; filename: string; status: IngestionJob["status"]; errorMessage: string | null }
 
 const DocumentPage = ({ user }: DocumentPageProps) => {
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
@@ -33,6 +35,15 @@ const DocumentPage = ({ user }: DocumentPageProps) => {
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState("")
   const [newFolderRole, setNewFolderRole] = useState<Role>("READ")
+  const [dragOver, setDragOver] = useState(false)
+  const [trackedJobs, setTrackedJobs] = useState<TrackedJob[]>([])
+  const [searchTerm, setSearchTerm] = useState("")
+  const [statusFilter, setStatusFilter] = useState("ALL")
+  const [sortOrder, setSortOrder] = useState("NEWEST")
+  const [selectedDocumentId, setSelectedDocumentId] = useState("")
+  const [versions, setVersions] = useState<DocumentVersion[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const binaryInput = useRef<HTMLInputElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async (folderId: string | null) => {
@@ -60,6 +71,24 @@ const DocumentPage = ({ user }: DocumentPageProps) => {
     })
     return () => { active = false }
   }, [currentFolderId])
+
+  useEffect(() => {
+    if (!trackedJobs.some((job) => !["READY", "FAILED"].includes(job.status))) return
+    const timer = window.setInterval(() => {
+      void Promise.all(trackedJobs.filter((job) => !["READY", "FAILED"].includes(job.status))
+        .map(async (job) => {
+          try {
+            const latest = await api.ingestionJob(job.jobId)
+            setTrackedJobs((current) => current.map((item) => item.jobId === job.jobId
+              ? { ...item, status: latest.status, errorMessage: latest.errorMessage }
+              : item))
+          } catch {
+            setError("Processing status could not be refreshed. Try reloading the folder.")
+          }
+        }))
+    }, 1600)
+    return () => window.clearInterval(timer)
+  }, [trackedJobs])
 
   const openFolder = (folderId: string | null) => {
     setNotice("")
@@ -114,6 +143,59 @@ const DocumentPage = ({ user }: DocumentPageProps) => {
     }
   }
 
+  const uploadBinary = async (file: File) => {
+    setError("")
+    setNotice("")
+    const extension = file.name.toLowerCase().split(".").pop()
+    if (!["pdf", "txt", "md", "markdown", "docx"].includes(extension ?? "")) {
+      setError("Choose a PDF, TXT, Markdown, or DOCX document.")
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError("Files must be 10 MB or smaller.")
+      return
+    }
+    setUploading(true)
+    try {
+      const result = await api.uploadDocument(file, minRole, currentFolderId)
+      setNotice(result.status === "PROCESSING" ? `"${file.name}" uploaded and queued for processing.` : result.message)
+      trackJob(result, file.name)
+      await load(currentFolderId)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Document upload failed.")
+    } finally {
+      setUploading(false)
+      if (binaryInput.current) binaryInput.current.value = ""
+    }
+  }
+
+  const trackJob = (result: { jobId?: string | null; status: string }, name: string) => {
+    if (!result.jobId || result.status !== "PROCESSING") return
+    const jobId = result.jobId
+    setTrackedJobs((current) => [
+      { jobId, filename: name, status: "UPLOADED", errorMessage: null },
+      ...current.filter((job) => job.jobId !== jobId),
+    ])
+  }
+
+  const showVersions = async (document: DocumentItem) => {
+    if (selectedDocumentId === document.id) {
+      setSelectedDocumentId("")
+      setVersions([])
+      return
+    }
+    setSelectedDocumentId(document.id)
+    setVersionsLoading(true)
+    setError("")
+    try {
+      setVersions(await api.documentVersions(document.id))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load document versions.")
+    } finally {
+      setVersionsLoading(false)
+    }
+  }
+
   const upload = async (event: FormEvent) => {
     event.preventDefault()
     if (!filename.trim() || !content.trim()) return
@@ -122,7 +204,10 @@ const DocumentPage = ({ user }: DocumentPageProps) => {
     setNotice("")
     try {
       const result = await api.createDocument(filename.trim(), content, minRole, currentFolderId)
-      setNotice(`Document ingested with ${result.chunkCount} chunks.`)
+      trackJob(result, filename.trim())
+      setNotice(result.status === "PROCESSING"
+        ? `Document queued for ingestion${result.jobId ? ` (job ${result.jobId}).` : "."}`
+        : result.message)
       setFilename("")
       setContent("")
       if (fileInput.current) fileInput.current.value = ""
@@ -147,7 +232,10 @@ const DocumentPage = ({ user }: DocumentPageProps) => {
     setError("")
     try {
       const result = await api.updateDocument(editing.id, editContent)
-      setNotice(`Document updated with ${result.chunkCount} chunks.`)
+      trackJob(result, editing.filename)
+      setNotice(result.status === "PROCESSING"
+        ? `Document update queued${result.jobId ? ` (job ${result.jobId}).` : "."}`
+        : result.message)
       setEditing(null)
       await load(currentFolderId)
     } catch (cause) {
@@ -172,6 +260,16 @@ const DocumentPage = ({ user }: DocumentPageProps) => {
 
   const minimumRoles = roleOrder.filter((role) => roleOrder.indexOf(role) <= roleOrder.indexOf(user.role))
   const { folders, documents, breadcrumbs } = contents
+  const visibleDocuments = documents.filter((document) => {
+    const matchesSearch = document.filename.toLowerCase().includes(searchTerm.trim().toLowerCase())
+    const matchesStatus = statusFilter === "ALL"
+      || (statusFilter === "PROCESSING" && !["READY", "FAILED", "DELETED"].includes(document.status))
+      || document.status === statusFilter
+    return matchesSearch && matchesStatus
+  }).sort((a, b) => sortOrder === "OLDEST"
+    ? a.createdAt.localeCompare(b.createdAt)
+    : sortOrder === "NAME" ? a.filename.localeCompare(b.filename)
+      : b.createdAt.localeCompare(a.createdAt))
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto">
@@ -235,13 +333,73 @@ const DocumentPage = ({ user }: DocumentPageProps) => {
         </section>
 
         {canWrite(user.role) && (
+          <section
+            onDragOver={(event) => { event.preventDefault(); setDragOver(true) }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOver(false)
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              setDragOver(false)
+              const file = event.dataTransfer.files[0]
+              if (file) void uploadBinary(file)
+            }}
+            className={`rounded-2xl border-2 border-dashed p-6 text-center transition ${
+              dragOver ? "border-indigo-500 bg-indigo-50" : "border-slate-300 bg-white"
+            }`}
+          >
+            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
+              {uploading ? <LoaderCircle className="animate-spin" size={20} /> : <Upload size={20} />}
+            </div>
+            <h2 className="mt-3 text-sm font-semibold text-slate-800">{uploading ? "Uploading document…" : "Add a knowledge source"}</h2>
+            <p className="mt-1 text-sm text-slate-500">Drag a PDF, TXT, Markdown, or DOCX file here, or choose a file. Maximum 10 MB.</p>
+            <input ref={binaryInput} type="file" accept=".pdf,.txt,.md,.markdown,.docx,application/pdf,text/plain" className="sr-only"
+              onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadBinary(file) }} />
+            <button type="button" disabled={uploading} onClick={() => binaryInput.current?.click()}
+              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
+              <FilePlus2 size={16} /> Choose document
+            </button>
+            {trackedJobs.length > 0 && (
+              <div className="mx-auto mt-5 grid max-w-2xl gap-3 text-left">
+                {trackedJobs.slice(0, 3).map((job) => {
+                  const stageIndex = ingestionStages.indexOf(job.status)
+                  return (
+                    <div key={job.jobId} className="rounded-xl border border-slate-200 bg-white p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-xs font-semibold text-slate-700">{job.filename}</span>
+                        <span className={`text-xs font-medium ${job.status === "FAILED" ? "text-rose-600" : job.status === "READY" ? "text-emerald-600" : "text-indigo-600"}`}>
+                          {job.status}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-6">
+                        {ingestionStages.map((stage, index) => {
+                          const complete = job.status === "READY" || index < stageIndex
+                          const current = job.status !== "FAILED" && index === stageIndex && job.status !== "READY"
+                          return <span key={stage} className={`flex items-center gap-1 text-[10px] ${
+                            complete ? "text-emerald-700" : current ? "font-semibold text-indigo-700" : "text-slate-400"
+                          }`}>
+                            {complete ? <Check size={12} /> : current ? <LoaderCircle size={12} className="animate-spin" /> : <Circle size={11} />}
+                            {stage}
+                          </span>
+                        })}
+                      </div>
+                      {job.errorMessage && <p className="mt-2 text-xs text-rose-700">{job.errorMessage}</p>}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {canWrite(user.role) && (
           <form onSubmit={upload} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
             <div className="mb-5 flex items-center gap-3">
               <div className="rounded-xl bg-indigo-50 p-2.5 text-indigo-600"><FilePlus2 size={20} /></div>
               <div>
-                <h2 className="font-semibold">Add a knowledge source</h2>
+                <h2 className="font-semibold">Paste text directly</h2>
                 <p className="text-sm text-slate-500">
-                  Uploads to {currentFolderId ? `"${breadcrumbs[breadcrumbs.length - 1]?.name ?? "this folder"}"` : "My Drive"}.
+                  Create a plain-text source in {currentFolderId ? `"${breadcrumbs[breadcrumbs.length - 1]?.name ?? "this folder"}"` : "My Drive"}.
                 </p>
               </div>
             </div>
@@ -285,22 +443,40 @@ const DocumentPage = ({ user }: DocumentPageProps) => {
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="font-semibold">Documents in this folder</h2>
-              <p className="mt-1 text-sm text-slate-500">{documents.length} document{documents.length === 1 ? "" : "s"} visible to your role</p>
+              <p className="mt-1 text-sm text-slate-500">{visibleDocuments.length} document{visibleDocuments.length === 1 ? "" : "s"} visible to your role</p>
             </div>
-            <button type="button" onClick={() => void load(currentFolderId)} aria-label="Refresh documents"
-              className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><RefreshCw size={17} /></button>
+            <div className="flex items-center gap-2">
+              <label className="relative">
+                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Filter documents"
+                  className="w-40 rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm outline-none focus:border-indigo-400 sm:w-56" />
+              </label>
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter by status"
+                className="max-w-28 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs sm:max-w-none sm:text-sm">
+                <option value="ALL">All status</option>
+                {["READY", "PROCESSING", "FAILED"].map((status) => <option key={status} value={status}>{status}</option>)}
+              </select>
+              <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} aria-label="Sort documents"
+                className="hidden rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm sm:block">
+                <option value="NEWEST">Newest</option>
+                <option value="OLDEST">Oldest</option>
+                <option value="NAME">Name</option>
+              </select>
+              <button type="button" onClick={() => void load(currentFolderId)} aria-label="Refresh documents"
+                className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><RefreshCw size={17} /></button>
+            </div>
           </div>
           {loading ? (
             <div className="flex items-center gap-2 py-10 text-sm text-slate-500"><LoaderCircle className="animate-spin" size={18} /> Loading documents…</div>
-          ) : documents.length === 0 ? (
+          ) : visibleDocuments.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 px-5 py-12 text-center">
               <FileText className="mx-auto text-slate-300" size={30} />
-              <p className="mt-3 font-medium text-slate-700">No documents here yet</p>
-              <p className="mt-1 text-sm text-slate-500">Ingest a document to make it searchable.</p>
+              <p className="mt-3 font-medium text-slate-700">{documents.length ? "No documents match these filters" : "No documents here yet"}</p>
+              <p className="mt-1 text-sm text-slate-500">{documents.length ? "Change the search or status filter." : "Ingest a document to make it searchable."}</p>
             </div>
           ) : (
             <div className="overflow-hidden rounded-2xl border border-slate-200">
-              {documents.map((document, index) => (
+              {visibleDocuments.map((document, index) => (
                 <article key={document.id} className={`flex flex-wrap items-center gap-4 px-4 py-4 md:px-5 ${index ? "border-t border-slate-100" : ""}`}>
                   <div className="rounded-xl bg-slate-100 p-3 text-slate-600"><FileText size={19} /></div>
                   <div className="min-w-0 flex-1">
@@ -313,10 +489,40 @@ const DocumentPage = ({ user }: DocumentPageProps) => {
                   }`}>{document.status}</span>
                   {canWrite(user.role) && document.status !== "DELETED" && (
                     <div className="flex gap-1">
+                      <button type="button" onClick={() => void showVersions(document)} title="Document details and version history"
+                        className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"><Info size={16} /></button>
                       <button type="button" onClick={() => startEdit(document)} title="Replace content"
                         className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"><Pencil size={16} /></button>
                       <button type="button" onClick={() => void remove(document)} title="Delete document"
                         className="rounded-lg p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-700"><Trash2 size={16} /></button>
+                    </div>
+                  )}
+                  {!canWrite(user.role) && (
+                    <button type="button" onClick={() => void showVersions(document)} title="Document details and version history"
+                      className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"><Info size={16} /></button>
+                  )}
+                  {selectedDocumentId === document.id && (
+                    <div className="basis-full rounded-xl bg-slate-50 p-4">
+                      <div className="grid gap-2 border-b border-slate-200 pb-3 text-xs sm:grid-cols-3">
+                        <p><span className="text-slate-500">Access:</span> <span className="font-medium">{document.minRoleRequired} and above</span></p>
+                        <p><span className="text-slate-500">Added:</span> <span className="font-medium">{prettyDate(document.createdAt)}</span></p>
+                        <p className="truncate"><span className="text-slate-500">Active version:</span> <span className="font-mono">{document.activeVersionId ?? "Not assigned"}</span></p>
+                      </div>
+                      <div className="mt-3 flex items-center gap-2">
+                        <Info size={14} className="text-slate-500" />
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Version history</p>
+                      </div>
+                      {versionsLoading ? <p className="mt-2 text-sm text-slate-500">Loading versions…</p> : versions.length ? (
+                        <div className="mt-2 divide-y divide-slate-200">
+                          {versions.map((version) => <div key={version.id} className="flex flex-wrap items-center gap-2 py-2 text-xs text-slate-600">
+                            <span className="font-semibold">Version {version.versionNumber}</span>
+                            <span>{version.status}</span>
+                            {version.active && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">Active</span>}
+                            <span className="ml-auto">{prettyDate(version.createdAt)}</span>
+                            <span className="font-mono text-slate-400">{version.contentHash.slice(0, 12)}…</span>
+                          </div>)}
+                        </div>
+                      ) : <p className="mt-2 text-sm text-slate-500">No version history available.</p>}
                     </div>
                   )}
                 </article>

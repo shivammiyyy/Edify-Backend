@@ -1,6 +1,8 @@
 package com.example.ragingestor.ingestion;
 
 import com.example.ragingestor.ingestion.dto.IngestionDtos.*;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.eventbus.Message;
 import org.springframework.stereotype.Component;
@@ -8,36 +10,38 @@ import org.springframework.stereotype.Component;
 @Component
 public class IngestionVerticle extends AbstractVerticle {
 
-    public static final String ADDR_CREATE = "ingestion.create";
-    public static final String ADDR_UPDATE = "ingestion.update";
     public static final String ADDR_DELETE = "ingestion.delete";
+    public static final String ADDR_PROCESS_JOB = "ingestion.process-job";
 
     private final DocumentIngestionService ingestionService;
+    private final IngestionProcessor ingestionProcessor;
+    private final ObjectMapper objectMapper;
 
-    public IngestionVerticle(DocumentIngestionService ingestionService) {
+    public IngestionVerticle(DocumentIngestionService ingestionService, IngestionProcessor ingestionProcessor,
+                             ObjectMapper objectMapper) {
         this.ingestionService = ingestionService;
+        this.ingestionProcessor = ingestionProcessor;
+        this.objectMapper = objectMapper;
     }
 
     @Override
     public void start() {
-        // executeBlocking because chunking + embedding HTTP calls + JDBC writes are all
-        // blocking work; keeps Vert.x's event loop free while still giving us request/reply
-        // semantics back to the calling Spring controller.
-        vertx.eventBus().<CreateDocumentCommand>consumer(ADDR_CREATE, this::handleCreate);
-        vertx.eventBus().<UpdateDocumentCommand>consumer(ADDR_UPDATE, this::handleUpdate);
+        // Kafka delivery is handed to a blocking worker so extraction, embeddings, and JDBC
+        // never block the Vert.x event loop.
         vertx.eventBus().<DeleteDocumentCommand>consumer(ADDR_DELETE, this::handleDelete);
+        vertx.eventBus().<String>consumer(ADDR_PROCESS_JOB, this::handleProcessJob);
     }
 
-    private void handleCreate(Message<CreateDocumentCommand> msg) {
-        vertx.executeBlocking(() -> ingestionService.create(msg.body()))
-                .onSuccess(msg::reply)
-                .onFailure(err -> msg.fail(500, err.getMessage()));
-    }
-
-    private void handleUpdate(Message<UpdateDocumentCommand> msg) {
-        vertx.executeBlocking(() -> ingestionService.update(msg.body()))
-                .onSuccess(msg::reply)
-                .onFailure(err -> msg.fail(failureCode(err), err.getMessage()));
+    private void handleProcessJob(Message<String> msg) {
+        vertx.executeBlocking(() -> {
+            try {
+                ingestionProcessor.process(objectMapper.readValue(msg.body(), DocumentIngestionEvent.class));
+                return "processed";
+            } catch (JsonProcessingException e) {
+                throw new IllegalArgumentException("Invalid ingestion event on Vert.x event bus", e);
+            }
+        }).onSuccess(msg::reply)
+                .onFailure(error -> msg.fail(500, error.getMessage()));
     }
 
     private void handleDelete(Message<DeleteDocumentCommand> msg) {
