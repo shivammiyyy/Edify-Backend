@@ -1,35 +1,224 @@
-# Edify
+<div align="center">
 
-## Enterprise AI Knowledge Platform
+<img src="Frontend/public/favicon.svg" alt="Edify logo" width="84" height="84" />
 
-Edify is a role-aware knowledge workspace for uploading company documents and asking
-grounded questions with source citations. The application pairs a React and TypeScript
-workspace with a stateful Spring Boot API, authorization-aware hybrid search, and an
-asynchronous ingestion pipeline.
+# EDIFY
 
-The design stays intentionally small: Spring Boot owns HTTP and security; Vert.x processes
-ingestion inside the same JVM; Kafka carries local ingestion events; PostgreSQL/pgvector
-stores application data and embeddings. Cloud deployments can use hosted AI and dispatch
-ingestion to the embedded worker without operating Kafka.
+### Enterprise AI Knowledge Platform
 
-**Local image note:** the Compose MinIO service uses the pinned
-`bitnamilegacy/minio:2025.7.23-debian-12-r5` image because the previously configured
-`minio/minio` Docker Hub tag is no longer publicly available. The legacy image is for
-local development only; use managed S3-compatible object storage for deployments.
+**Upload your company documents. Ask questions. Get grounded answers with citations — only from what you're allowed to see.**
 
-## Table of contents
+<br />
 
-- [Features](#features)
+[![Java 17](https://img.shields.io/badge/Java-17-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![Redis](https://img.shields.io/badge/Redis-7.4-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
+[![Kafka](https://img.shields.io/badge/Apache_Kafka-3.9-231F20?style=flat-square&logo=apachekafka&logoColor=white)](https://kafka.apache.org/)
+[![Vert.x](https://img.shields.io/badge/Eclipse_Vert.x-4.5-782A90?style=flat-square&logo=eclipsevertdotx&logoColor=white)](https://vertx.io/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![Ollama](https://img.shields.io/badge/Ollama-local_AI-000000?style=flat-square&logo=ollama&logoColor=white)](https://ollama.com/)
+[![CI](https://img.shields.io/github/actions/workflow/status/shivammiyyy/Edify-Backend/ci.yml?branch=main&style=flat-square&label=CI&logo=githubactions&logoColor=white)](https://github.com/shivammiyyy/Edify-Backend/actions/workflows/ci.yml)
+
+<br />
+
+[Problem](#-problem-statement) ·
+[Solution](#-solution) ·
+[Architecture](#-architecture) ·
+[Quick Start](#-quick-start) ·
+[Features](#-features) ·
+[API](#api-documentation) ·
+[Deploy](#cloud-deployment)
+
+<br />
+
+<img src="docs/images/workspace-search.png" alt="Edify AI assistant answering a question with source citations" width="92%" />
+
+</div>
+
+<br />
+
+> [!NOTE]
+> The Compose MinIO service uses the pinned `bitnamilegacy/minio:2025.7.23-debian-12-r5` image because the previously configured `minio/minio` Docker Hub tag is no longer publicly available. It is for **local development only** — use managed S3-compatible storage for deployments.
+
+---
+
+## 🎯 Problem Statement
+
+Organizations accumulate policies, runbooks, product specs, and other critical knowledge across countless files and folders. Getting a reliable answer today means:
+
+- 🔍 **Hunting** for the right document among many.
+- 🔐 **Wondering** whether you're even allowed to see it — and whether the people searching are.
+- 🧩 **Stitching together** relevant passages by hand.
+- 🤖 **Distrusting** generic chatbots that hallucinate answers and never tell you where they came from.
+
+## 💡 Solution
+
+**Edify** is a secure, role-aware knowledge workspace powered by retrieval-augmented generation (RAG).
+
+| | What Edify does |
+|---|---|
+| 📁 **Organize** | Drive-style nested folders, versioned PDF / TXT / Markdown / DOCX documents |
+| 🛡️ **Protect** | Four-level RBAC plus folder-level gating, enforced in the API **and** inside SQL retrieval queries |
+| ⚡ **Ingest** | Asynchronous Kafka → Vert.x pipeline: extract, chunk, embed, index — with live progress |
+| 🔎 **Retrieve** | Hybrid search (pgvector semantic + PostgreSQL full-text) with weighted reranking |
+| 💬 **Answer** | Streaming (SSE) answers grounded in your documents, always with source citations |
+| 🔌 **Flex** | Local Ollama or any OpenAI-compatible cloud provider — swap with one env var |
+
+## 🧩 Architecture
+
+```mermaid
+flowchart LR
+    User(["👤 User"]) --> UI["⚛️ React + TypeScript UI"]
+    UI -->|"HTTPS · session cookie · CSRF"| API["🍃 Spring Boot API + SSE"]
+
+    API --> Auth["🔐 Google OAuth2/OIDC<br/>+ role checks"]
+    API --> Docs["📄 Document & folder services"]
+    API --> RAG["🧠 RAG & conversation services"]
+    API --> Redis[("⚡ Redis<br/>embedding cache · rate limits")]
+
+    Docs --> Store[("🗄️ MinIO / S3<br/>original files")]
+    Docs -->|"uploaded event"| Kafka{{"📨 Kafka"}}
+    Kafka --> Worker["⚙️ Vert.x worker<br/>(same JVM)"]
+    Worker --> Parse["Extract → Chunk → Embed"]
+    Parse --> DB[("🐘 PostgreSQL + pgvector")]
+    Parse --> AI["🤖 Ollama / OpenAI-compatible"]
+
+    RAG --> Search["Authorized hybrid retrieval<br/>+ weighted reranking"]
+    Search --> DB
+    RAG --> AI
+    RAG -->|"tokens · sources · status"| UI
+```
+
+<details>
+<summary><b>How the pieces fit together</b></summary>
+
+<br />
+
+- **Spring Boot** owns HTTP, sessions, CSRF, authorization, and SSE streaming.
+- **Vert.x** runs inside the same JVM and processes ingestion off the request thread.
+- **Kafka** carries ingestion events in local Compose. Hosted deployments can set `KAFKA_ENABLED=false` and dispatch straight to the in-process worker (asynchronous, but no durable replay after a restart).
+- **PostgreSQL + pgvector** store application data, chunks, and 1024-dimensional embeddings.
+- **Redis** caches embeddings (by content SHA-256 + model) and enforces per-user rate limits — it is never a source of truth.
+- **MinIO / S3** holds the original document versions.
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full write-up.
+
+</details>
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+| Requirement | Needed for | Notes |
+|---|---|---|
+| 🐳 **Docker Desktop** (Compose v2) | Both options | Runs Postgres, Redis, Kafka, MinIO (and Ollama in Option A) |
+| ☕ **Java 17** + **Maven** | Option B | Native backend |
+| 🟢 **Node.js** + **npm** | Option B | Native frontend |
+| 🔑 **Google OAuth 2.0 Web client** | Both options | See [Google OAuth setup](#google-oauth-setup) |
+| 🦙 **Ollama models** | Both options | `qwen3:8b` (chat) and `qwen3-embedding:0.6b` (1024-dim embeddings) |
+
+> [!TIP]
+> Set the Google OAuth redirect URI to `http://localhost:8080/login/oauth2/code/google` and the authorized origin to `http://localhost:8080` (plus `http://localhost:5173` for Option B).
+
+### Option A — Everything in Docker
+
+Runs the UI, backend, PostgreSQL/pgvector, Redis, Kafka, MinIO, and Ollama.
+
+```powershell
+# 1. Create your environment file, then set GOOGLE_CLIENT_ID,
+#    GOOGLE_CLIENT_SECRET and APP_ADMIN_EMAIL inside it
+Copy-Item .env.example .env
+
+# 2. Build and start the stack
+docker compose -f docker-compose.prod.yml up --build -d
+
+# 3. Pull the AI models once (stored in a persistent volume)
+docker compose -f docker-compose.prod.yml exec ollama ollama pull qwen3:8b
+docker compose -f docker-compose.prod.yml exec ollama ollama pull qwen3-embedding:0.6b
+```
+
+Open **http://localhost:8080** and sign in with Google. 🎉
+
+<details>
+<summary><b>Already have Ollama on your host? Use the default Compose file</b></summary>
+
+<br />
+
+`docker-compose.yml` builds the UI into the Spring Boot image and expects Ollama on the host at port `11434`.
+
+```powershell
+ollama pull qwen3:8b
+ollama pull qwen3-embedding:0.6b
+docker compose up --build -d
+```
+
+</details>
+
+<details>
+<summary><b>Useful Compose commands</b></summary>
+
+<br />
+
+```powershell
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs -f backend
+docker compose -f docker-compose.prod.yml down        # add -v to also delete all data
+```
+
+</details>
+
+### Option B — Native hot-reload development
+
+Docker supplies the infrastructure; the backend and frontend run natively for fast feedback. Install and run Ollama on the host first and pull both models.
+
+```powershell
+# Infrastructure: Postgres + pgvector, Redis, MinIO, Kafka, Adminer
+docker compose -f docker-compose.dev.yml up -d
+
+# Terminal 1 — backend on :8080 (Spring Boot does not auto-load .env)
+$env:GOOGLE_CLIENT_ID     = "your-google-client-id"
+$env:GOOGLE_CLIENT_SECRET = "your-google-client-secret"
+$env:APP_ADMIN_EMAIL      = "you@example.com"
+$env:OAUTH_SUCCESS_URL    = "http://localhost:5173/"
+mvn spring-boot:run
+
+# Terminal 2 — frontend on :5173 with hot reload
+cd Frontend
+npm ci
+npm run dev
+```
+
+| Service | URL |
+|---|---|
+| Frontend (Vite) | http://localhost:5173 |
+| Backend API | http://localhost:8080 |
+| Swagger UI | http://localhost:8080/swagger-ui/index.html |
+| MinIO console | http://localhost:9001 |
+| Adminer (DB browser) | http://localhost:8081 |
+| Kafka (host) | `localhost:29092` |
+
+Stop the infrastructure with `docker compose -f docker-compose.dev.yml down` (add `-v` to delete local data).
+
+---
+
+## 📑 Table of contents
+
+- [Problem Statement](#-problem-statement)
+- [Solution](#-solution)
+- [Architecture](#-architecture)
+- [Quick Start](#-quick-start)
+- [Features](#-features)
 - [Screenshots](#screenshots)
-- [Architecture](#architecture)
 - [Technology stack](#technology-stack)
 - [RAG pipeline](#rag-pipeline)
 - [Event-driven ingestion](#event-driven-ingestion)
 - [Security](#security)
 - [Roles and permissions](#roles-and-permissions)
 - [Project layout](#project-layout)
-- [Docker](#docker)
-- [Local development](#local-development)
 - [Google OAuth setup](#google-oauth-setup)
 - [Configuration reference](#configuration-reference)
 - [API documentation](#api-documentation)
@@ -37,10 +226,9 @@ local development only; use managed S3-compatible object storage for deployments
 - [Cloud deployment](#cloud-deployment)
 - [Health and metrics](#health-and-metrics)
 - [CI/CD](#cicd)
-- [Resume description](#resume-description)
 - [Known limitations and future improvements](#known-limitations-and-future-improvements)
 
-## Features
+## ✨ Features
 
 - **Stateful session auth** with Google OAuth2/OIDC login (`JSESSIONID` cookie, CSRF
   enabled) — no JWTs, no stateless API tokens.
@@ -96,29 +284,6 @@ Representative UI captures currently checked into the repository:
 | Role and access management |
 |---|
 | ![Access management](docs/images/access-management.png) |
-
-## Architecture
-
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full write-up. Short version:
-
-```mermaid
-flowchart LR
-    Browser["React + TypeScript SPA"] -->|HTTPS, session cookie, CSRF| API["Spring Boot REST + SSE"]
-    API --> Auth["Spring Security OAuth2/OIDC + RBAC"]
-    API --> DB[("PostgreSQL + pgvector")]
-    API --> Redis[("Redis: embedding cache + limits")]
-    API --> Storage[("MinIO / S3 object storage")]
-    API --> RAG["RAG orchestrator"]
-    RAG --> Search["Authorized hybrid retrieval + reranking"]
-    Search --> DB
-    RAG --> Model["Ollama locally / hosted LLM"]
-    API -->|local transport| Kafka["Kafka ingestion topics"]
-    Kafka --> Vertx["Vert.x worker in same JVM"]
-    API -. "hosted profile, Kafka disabled" .-> Vertx
-    Vertx --> Storage
-    Vertx --> DB
-    Vertx --> Model
-```
 
 ## Technology stack
 
@@ -196,82 +361,15 @@ src/main/java/com/example/ragingestor/
   security/     OAuth2/OIDC principals, authorization, roles, API error handling
 
 Frontend/       React + TypeScript + Vite workspace
-docker-compose.yml        Full local stack (frontend, backend, Postgres, Redis, Kafka,
-                          MinIO, Ollama)
+docker-compose.yml        Bundled UI/API app with Postgres, Redis, Kafka, and MinIO;
+                          Ollama runs on the host
 docker-compose.dev.yml    Native hot-reload development infrastructure
+docker-compose.prod.yml   Containerized frontend/backend stack with Ollama
 Dockerfile                Bundled frontend/backend image
 Dockerfile.backend        Backend-only image
 Frontend/Dockerfile       Nginx-served SPA image
 .github/workflows/        CI, dependency scan, and GHCR publishing
 ```
-
-## Docker
-
-You'll need Docker Desktop. The full Compose stack includes Ollama and persists pulled
-models in a named volume.
-
-Copy `.env.example` to `.env` and fill in `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-and `APP_ADMIN_EMAIL` (see [Google OAuth setup](#google-oauth-setup) below). `.env` is
-git-ignored — never commit real secrets.
-
-### Full local stack
-
-Build and start the frontend, non-root Spring Boot backend, PostgreSQL/pgvector, Redis,
-Kafka, MinIO, and Ollama:
-
-```powershell
-docker compose up --build -d
-```
-
-Pull the chat and embedding models once into the persistent Ollama volume:
-
-```powershell
-docker compose exec ollama ollama pull qwen3:8b
-docker compose exec ollama ollama pull qwen3-embedding:0.6b
-```
-
-Open `http://localhost:8080`. Nginx forwards API, OAuth, and SSE traffic to Spring Boot
-so the browser uses one origin. Database, Redis, Kafka, MinIO, and model data persist in
-named volumes. Useful commands:
-
-```powershell
-docker compose ps
-docker compose logs -f backend
-docker compose down
-```
-
-`docker compose down -v` also removes persisted database, object-storage, cache, Kafka,
-and Ollama model data.
-
-## Local development
-
-### Native services with hot reload
-
-Postgres, Redis, MinIO, Kafka, and an optional [Adminer](https://www.adminer.org/) DB browser at
-`http://localhost:8081` run in Docker; the backend and frontend run natively so you get
-fast rebuild/hot-reload loops. Redis is available at `localhost:6379`, MinIO's console at
-`http://localhost:9001`, and Kafka at `localhost:29092`.
-
-```powershell
-docker compose -f docker-compose.dev.yml up -d
-
-# Terminal 1 — backend on :8080
-$env:OAUTH_SUCCESS_URL = 'http://localhost:5173/'
-mvn spring-boot:run
-
-# Terminal 2 — frontend on :5173 with hot reload
-cd Frontend
-npm run dev
-```
-
-Open the Vite URL printed by `npm run dev` (normally `http://localhost:5173`). The
-frontend talks to the backend on `:8080` with `credentials: 'include'`; Spring allows
-that origin via `FRONTEND_ORIGIN`. Run Ollama on the host and pull the two models listed
-above for this native hot-reload mode. Google OAuth must still use the backend's redirect
-URI on port 8080 — the success handler then bounces the browser back to Vite.
-
-Switching between the two is just picking which `-f docker-compose.*.yml` file you pass
-to `docker compose`; nothing else in the repo needs to change.
 
 ## Google OAuth setup
 
@@ -465,14 +563,6 @@ endpoint exposes prompt text, document contents, user IDs, or other request-leve
 Run `mvn verify` to execute unit tests and the Testcontainers integration test for
 PostgreSQL/pgvector, Redis, and Kafka. The integration test is skipped automatically if
 Docker is unavailable.
-
-## Resume description
-
-> Built an AI knowledge platform with Java 17, Spring Boot, OAuth2/OIDC, role-aware
-> document access, PostgreSQL/pgvector, Redis, Kafka, and embedded Vert.x ingestion.
-> Implemented asynchronous document versioning, hybrid semantic/keyword retrieval,
-> citation-grounded RAG with SSE streaming, a React/TypeScript workspace, Docker Compose,
-> Testcontainers integration coverage, Micrometer metrics, and GitHub Actions CI/CD.
 
 ## Known limitations and future improvements
 
